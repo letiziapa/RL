@@ -4,6 +4,8 @@ import matplotlib.pyplot as plt
 import argparse
 import os
 import sys
+import warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning) 
 
 #env = gym.make('CartPole-v1', render_mode="human")
 env = gym.make('CartPole-v1')
@@ -151,7 +153,7 @@ class LearningAgent:
     def test(self):
         """Tests the agent in the environment."""
         #store the rewards for each episode
-        cumulative_reward = []
+        self.cumulative_reward = []
         for episode in range(self.episodes):
             ep_reward = 0
             state, _ = self.env.reset()
@@ -164,9 +166,13 @@ class LearningAgent:
                 next_state = self.digitize_state(next_state)
                 ep_reward += reward
                 state = next_state
-            print(f"Episode: {episode}, Reward: {ep_reward}")
-            #create a plot of the rewards
-            cumulative_reward.append(ep_reward)
+            
+            self.cumulative_reward.append(ep_reward)
+            mean_reward = np.mean(self.cumulative_reward[-100:])
+            if episode % 100 == 0:
+                print(
+                    f"Episode: {episode + self.total_episodes_trained} Mean Reward: {mean_reward:0.1f}"
+                )
 
        
 # agent = LearningAgent(env, alpha=0.05, epsilon=0.99, gamma=0.99, episodes=args.episodes, render = True)
@@ -195,9 +201,22 @@ if __name__ == "__main__":
     if choice == "1":
         print("Training the agent...")
         agent.train()
+        model_dir = "models"
+        if not os.path.exists(model_dir):
+            os.makedirs(model_dir)
+        model_path = os.path.join(model_dir, "cartpole_model.npy")
+        np.save(model_path, agent.q_table)
+        print(f"Model saved to {model_path}")
     elif choice == "2":
-        print("Testing the agent...")
-        agent.test()
+        # Load the trained model
+        model_path = "models/cartpole_model.npy"
+        if os.path.exists(model_path):
+            agent.q_table = np.load(model_path)
+            print(f"Model loaded from {model_path}")
+            agent.test()
+        else:
+            print("Trained model not found. Please train the agent first.")
+            agent.test()
     else:
         print("No action specified. Defaulting to training the agent.")
         agent.train()
