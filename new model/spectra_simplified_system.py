@@ -5,8 +5,10 @@ import h5py
 from scipy import signal
 from noControl import matrix, TransferFunc, AR_model
 from scipy.interpolate import interp1d
-
+from gymnasium import spaces
+import time
 np.random.seed(42)
+
 
 #structure of the hdf5 object 
 def print_hdf5_structure(obj, indent=0):
@@ -40,12 +42,13 @@ f = h5py.File("/Users/letizia/Desktop/INFN/new model/SaSR_test.hdf5", "r")
 dset = f['SR/V1:ENV_CEB_SEIS_V_dec']
 seism = f['SR/V1:ENV_CEB_SEIS_V_dec'][:] #seismic data
 #seism = seism[2000:] #remove the first 2000 samples 
-seism = seism * 1e-6
+seism = seism[:14000] *1e-6
+#print(seism[2000:2050])
 
 #constants
 nperseg = 2 ** 16 #samples per segment (useful for the PSD)
 
-T = 1800 #since we have removed the first 2000 samples, the signal duration is reduced
+T = 224 #since we have removed the first 2000 samples, the signal duration is reduced
 t = np.linspace(0, T, len(seism)) #time vector
 
 #parameter to be used in the time evolution
@@ -153,7 +156,7 @@ def evolution(evol_method, Nt_step, dt, physical_params, signal_params,
     return (tt, np.array(v1), np.array(v2), np.array(v6), np.array(x1), np.array(x2), np.array(x6))
 
 # temporal steps (for simulation)
-Nt_step = 1800000
+Nt_step = T * 1e3
 #physical parameters of the system
 gamma = [5, 5]  # viscous friction coeff [kg/m*s]
 M = [160, 125, 82]  # filter mass [Kg]
@@ -197,6 +200,51 @@ window = np.hanning(len(seism))
 x6_interp = interp1d(tt_sim, x6, kind='linear', bounds_error=False, fill_value=0.0)(tt_data)
 v6_interp = interp1d(tt_sim, v6, kind='linear', bounds_error=False, fill_value=0.0)(tt_data)
 
+A, B = matrix(*M, *K, *gamma, dt)  # system matrices
+print(A.shape, B.shape) 
+action_space = spaces.Box(
+            low=-1.0,
+            high=1.0,
+            shape=(1,),
+            dtype=np.float32
+        )
+observation_space = spaces.Discrete(10)
+vout, xout = [], []  # lists to store the output signals
+
+
+start = time.time()
+
+
+i = 0
+state = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float32)
+force = force_function(tt_sim, K[0], zt_interp)  # external force applied over time
+for t in tt_sim:
+    Fi = force[i] 
+    i = i + 1
+    state = AR_model(state, A, B, Fi)
+    #state = np.array([v1, v2, v6, x1, x2, x6], dtype=np.float32)  # update the state
+    vout.append(state[2])
+    xout.append(state[5])
+vout_interp = interp1d(tt_sim, vout, kind='linear', bounds_error=False, fill_value=0.0)(tt_data)
+xout_interp = interp1d(tt_sim, xout, kind='linear', bounds_error=False, fill_value=0.0)(tt_data)
+
+end = time.time()
+
+print(f"Simulation time: {end - start:.3f} seconds")
+
+    #print(f'\nAction {i}: {action}, State: {state}')
+# print(action_space)
+# action1 = (action_space.sample()) + (K[0] * xt[0].real)   # sample an action
+# action2 = (action_space.sample()) + (K[0] * xt[1].real) # sample another action
+# action3 = (action_space.sample()) + (K[0] * xt[2].real)  # sample another action
+# print(f'Action 1: {action1}, Action 2: {action2}, Action 3: {action3}')
+# state_evol = AR_model(state, A, B, action1)  # evolve the state for 1 step
+# state2 = AR_model(state_evol, A, B, action2)
+# state3 = AR_model(state2, A, B, action3)  # evolve the state for 2 steps
+# print(state_evol)
+# print(state_evol.shape)
+# print(state2)
+# print(state3)
 # #output in frequency domain (resampled to match the data time vector)
 #xf_in = np.fft.fft(X_f)  # input signal (zt)
 #xf_out = np.fft.fft(x6_interp)
@@ -227,6 +275,16 @@ trfn_vel = (vf_out[:half] / vf_in[:half])*dt  # experimental transfer function f
 trfn_vel_windowed = (vf_out_windowed[:half] / vf_in_windowed[:half])*dt  # experimental transfer function for velocity with windowing
 # trfn = (vf_out)/vf_in
 
+freq = frequencies[1:half]
+Pxx = psdVel[1:half]
+omega = 2 * np.pi * freq # angular frequencies
+Pxx = Pxx/omega**2
+ASDvelocity = np.sqrt(Pxx)  # Amplitude Spectral Density of the velocity (from data)
+OUT = (H[2][1:] * ASDvelocity ) # output without control for velocity (ASD)
+#OUT = (H[2] * np.fft.fft(x6_interp[:half]))  # output without control for velocity (ASD)
+df = np.diff(frequencies[1:half])  # frequency resolution
+varxx = np.cumsum(np.flip(df * OUT[:-1]) ** 2) # cumulative variance
+rms_nc = np.flip(np.sqrt(varxx))  # RMS value of the output
 #-----------queste cose qua sotto non sono plottate-----------#
 Hfn = (np.real(trfn) ** 2 + np.imag(trfn) ** 2) ** (1 / 2)
 Hfn_mag = np.abs(Hfn)
@@ -235,20 +293,23 @@ Hfn_mag = np.abs(Hfn)
 # psdZ = interp1d(fZ, psdZ, kind='linear', bounds_error=False, fill_value=0.0)(frequencies[:half])  # PSD of the displacement
 # w = 2 * np.pi * frequencies[:half]  # angular frequencies
 # psdVel = interp1d(fVel, psdVel, kind='linear', bounds_error=False, fill_value=0.0)(frequencies[:half])  # PSD of the velocity
-# psd_disp = psdVel / w**2 #convert to displacement
+#psd_disp = psdVel / omega**2 #convert to displacement
 
-# ASDdisplacement = np.sqrt(psd_disp)  # Amplitude Spectral Density of the displacement (from data)
+#ASDdisplacement = np.sqrt(psd_disp)  # Amplitude Spectral Density of the displacement (from data)
 # ASDvelocity = np.sqrt(psdVel)  # Amplitude Spectral Density of the velocity (from data)
 
 # out_asd_velocity = H[2] * ASDvelocity  # output without control for velocity (ASD)
 # out_asd_displacement = H[2] * ASDdisplacement  # output without control for displacement (ASD)
-fA_interp, psdAinterp = signal.welch(At_interp.real, fs = 1e3, window='hann', nperseg=nperseg)  # PSD of the acceleration
-out_nocontrol = (abs(trfn) * (abs(xf[:half])))  # output without control
-out_nocontrol_velocity =(abs(trfn_vel) * (abs(vf_in[:half])))  # output without control for velocity
+# fA_interp, psdAinterp = signal.welch(At_interp.real, fs = 1e3, window='hann', nperseg=nperseg)  # PSD of the acceleration
+# out_nocontrol = (abs(trfn)* (abs(xf[:half]))) # output without control
+# out_nocontrol_velocity =(abs(trfn_vel) * (abs(vf_in[:half])))  # output without control for velocity
 
-df = np.diff(frequencies[:half]) # frequency resolution
-var_nocontrol = np.cumsum(np.flip(df * (out_nocontrol[:-1])** 2))  # cumulative variance
-rms_nocontrol = np.flip(np.sqrt(var_nocontrol))  # RMS value of the output without control
+# df = np.diff(frequencies[:half]) # frequency resolution
+# var_nocontrol = np.cumsum(np.flip(df * (out_nocontrol[:-1])** 2))  # cumulative variance
+# rms_nocontrol = np.flip(np.sqrt(var_nocontrol))  # RMS value of the output without control
+#print(f'mean:{np.mean(rms_nocontrol)}, max:{np.max(rms_nocontrol)}, min:{np.min(rms_nocontrol)}')
+
+#print(f'Mean displacement: {np.mean(out_nocontrol):.3e} m, min: {np.min(out_nocontrol):.3e} m, max: {np.max(out_nocontrol):.3e} m')
 
 if __name__ == '__main__':
     #print the structure of the dataset
@@ -260,6 +321,7 @@ if __name__ == '__main__':
 
     plt.subplot(1, 3, 1)
     plt.loglog(fVel, np.sqrt(psdVel), label='Velocity')
+    #plt.loglog(frequencies, abs(seism), label='Seismic data', color='orange', alpha=0.7)
     plt.ylabel('Amplitude [m/s/$\sqrt{Hz}$]')
     plt.xlabel('Frequency [Hz]')
     plt.grid(which = 'both', axis = 'both')
@@ -274,7 +336,7 @@ if __name__ == '__main__':
 
     plt.subplot(1, 3, 3)
     plt.loglog(fAcc, np.sqrt(psdAcc), label ='Acceleration', color='green')
-    plt.loglog(fA_interp, np.sqrt(psdAinterp), label ='Acceleration (interpolated)', color='red', alpha=0.7)
+    #plt.loglog(fA_interp, np.sqrt(psdAinterp), label ='Acceleration (interpolated)', color='red', alpha=0.7)
     plt.ylabel('Amplitude [m/s$^2$/$\sqrt{Hz}$]')
     plt.xlabel('Frequency [Hz]')
     plt.grid(which = 'both', axis = 'both')
@@ -320,8 +382,9 @@ if __name__ == '__main__':
     plt.loglog(abs(frequencies)[:half], H[2][:half], label="Theoretical TF (from model)", color="blue")
     plt.loglog(abs(frequencies)[:half], abs(trfn), label=r"Experimental TF ($\tilde{x}_{6}/\tilde{x}_{in}$)", color="red", alpha=0.9)
     plt.loglog(abs(frequencies[:half]), abs(trfn_windowed), label=r"Experimental TF ($\tilde{x}_{6}/\tilde{x}_{in}$, windowed)", color="darkred", alpha=0.7)
-    plt.loglog(abs(frequencies[:half]), abs(trfn_vel), label=r"Experimental TF ($\tilde{v}_{6}/\tilde{v}_{in}$)", color="lightgreen", alpha=0.7)
-    plt.loglog(abs(frequencies[:half]), abs(trfn_vel_windowed), label=r"Experimental TF ($\tilde{v}_{6}/\tilde{v}_{in}$, windowed)", color="darkgreen", alpha=0.7)
+    #plt.loglog(abs(frequencies[:half]), abs(trfn_vel), label=r"Experimental TF ($\tilde{v}_{6}/\tilde{v}_{in}$)", color="lightgreen", alpha=0.7)
+    #plt.loglog(abs(frequencies[:half]), abs(trfn_vel_windowed), label=r"Experimental TF ($\tilde{v}_{6}/\tilde{v}_{in}$, windowed)", color="darkgreen", alpha=0.7)
+    #plt.loglog(abs(frequencies[1:]), abs(np.fft.fft(xout_interp[1:])/xf)*dt, label="Test", color="orange")
     plt.xlabel("Frequency [Hz]")
     #plt.ylabel("Magnitude")
     plt.grid(True, which='both')
@@ -340,12 +403,12 @@ if __name__ == '__main__':
 
     plt.subplot(1, 2, 2)
     plt.title('Output response', size=13)
-    plt.loglog(frequencies[:half], out_nocontrol, linestyle='-', linewidth=1, marker='', color='green', label=r'Output (H*$\tilde{x}_{in}$)', alpha=0.7)
-    plt.loglog(frequencies[:half], out_nocontrol_velocity, linestyle='-', linewidth=1, marker='', color='red', label=r'Output (H*$\tilde{v}_{in}$)')
-    #plt.loglog(frequencies[:half], abs(trfn * xf[:half]), linestyle='--', linewidth=1, marker='', color='gold', label=r'Output (H_{exp}*$\tilde{x}_{in}$)')
-    plt.loglog(frequencies[:half], abs(vf_out[:half]), linestyle='-', linewidth=1, marker='', color='steelblue', label=r'Output ($\tilde{v}_{6}$)')
-    plt.loglog(frequencies[:half], abs(xf_out[:half]), linestyle='-', linewidth=1, marker='', color='lightcoral', label=r'Output ($\tilde{x}_{6}$)')
-    #plt.loglog(frequencies[:half], out_asd_velocity, linestyle='--', linewidth=1, marker='', color='darkorange', label=r'H*ASD ($\tilde{v}_{6}$)')
+    #plt.loglog(freq, abs(OUT), linestyle='-', linewidth=1, marker='', color='green', label=r'Output (H*$\tilde{x}_{in}$)')
+    #plt.loglog(frequencies[:half], out_nocontrol_velocity, linestyle='-', linewidth=1, marker='', color='red', label=r'Output (H*$\tilde{v}_{in}$)')
+    plt.loglog(frequencies[:half], abs(trfn * xf[:half]), linestyle='--', linewidth=1, marker='', color='gold')
+    plt.loglog(frequencies[:half], abs(vf_out[:half]*dt), linestyle='-', linewidth=1, marker='', color='steelblue', label=r'Output ($\tilde{v}_{6}$)', alpha=0.3)
+    plt.loglog(frequencies[:half], abs(xf_out[:half]*dt), linestyle='-', linewidth=1, marker='', color='lightcoral', label=r'Output ($\tilde{x}_{6}$)', alpha=0.3)
+    plt.loglog(frequencies[1:half], abs(OUT), linestyle='--', linewidth=1, marker='', color='darkorange', label=r'H*ASD ($\tilde{x}_{in}$)')
     #plt.loglog(frequencies[:half], out_asd_displacement, linestyle='--', linewidth=1, marker='', color='darkblue', label=r'H*ASD ($\tilde{x}_{6}$)')
     plt.xlabel('Frequency [Hz]', size=12)
     #plt.ylabel('ASD [m/$\sqrt{Hz}$]', size =12)
@@ -367,7 +430,9 @@ if __name__ == '__main__':
     #plt.ylim(1e-15, 1e-4)
     plt.grid(True, which='both', ls='-', alpha=0.3, lw=0.5)
     plt.minorticks_on()
-    plt.plot(frequencies[:half-1], rms_nocontrol, linestyle='-', linewidth=1, marker='', color='orange', label='No control')
+    plt.plot(frequencies[1:half-1], rms_nc, linestyle='-', linewidth=1, marker='', color='orange', label='No control')
+    plt.xlim(1e-2, 2)
+    plt.ylim(1e-15, 1)   
     plt.legend()
     plt.show()
 
