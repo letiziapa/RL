@@ -1,0 +1,17 @@
+name: infn
+channels:
+  - defaults
+dependencies:
+  - python=3.10
+  - gym
+  - ipykernel
+  - termcolor
+  - numpy
+  - conda-forge::gym-toy_text
+  - conda-forge::moviepy
+  - matplotlib
+  - keras
+  - tensorflow
+  - pyvirtualdisplay
+  - conda-forge::stable-baselines3
+prefix: /Users/letizia/miniconda3/envs/infn
