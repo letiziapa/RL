@@ -6,24 +6,21 @@ from environment import PendulumVerticalEnv
 import matplotlib.pyplot as plt
 from stable_baselines3 import SAC
 from noControl import matrix
+import stable_baselines3
 import h5py
 from stable_baselines3.common.callbacks import CallbackList, BaseCallback
 from stable_baselines3.common.logger import configure
 
 np.random.seed(42)
 
-
-class EnhancedLoggingCallback(BaseCallback):
-    def __init__(self, verbose=0):
-        super().__init__(verbose)
-        self.step_count = 0
+class LoggingCallback(BaseCallback):
+    def __init__(self):
+        super().__init__()
         
     def _on_step(self) -> bool:
-        self.step_count += 1
-        
-        # Log every step
-        if self.step_count % 1 == 0:
-            print(f"Training step: {self.step_count}")
+        if self.num_timesteps % 1000 == 0:
+            self.logger.record('train/timesteps', self.num_timesteps)
+            
             
             # Log buffer size if available
             if hasattr(self.model, 'replay_buffer') and self.model.replay_buffer.size() > 0:
@@ -31,19 +28,15 @@ class EnhancedLoggingCallback(BaseCallback):
                 self.logger.record('train/buffer_size', buffer_size)
                 print(f"Replay buffer size: {buffer_size}")
             
-            # Log current learning rate
-            if hasattr(self.model, 'learning_rate'):
-                self.logger.record('train/learning_rate', self.model.learning_rate)
-            
-            # Force dump the logs
-            self.logger.dump(step=self.step_count)
+            self.logger.dump(step=self.num_timesteps)
                 
         return True
 
-# Use it in training:
-callback = EnhancedLoggingCallback()
 
-def evaluate_control_performance(model, env, max_steps=100000):  
+# Use it in training:
+callback = LoggingCallback()
+
+def evaluate_control_performance(model, env, max_steps=1800000):  
     env.training = False
     if hasattr(env, 'norm_reward'):
         env.norm_reward = False
@@ -198,45 +191,51 @@ end = int(T * 62.5)
 nperseg = 2**16
 episode_length = T*1e3
 
-f = h5py.File("/Users/letizia/Desktop/INFN/new model/SaSR_test.hdf5", "r")
-seism = f['SR/V1:ENV_CEB_SEIS_V_dec'][:] #seismic data
-seism = seism[:end]*1e-6
-f.close()    
-
-tt_data = np.linspace(0, T, len(seism))
-tt_sim = np.arange(0, tmax, dt)
-
-vf = np.fft.fft(seism)
-frequencies = np.fft.fftfreq(len(seism), d = 1/62.5)
-half = len(frequencies) // 2  # half of the frequencies array (positive frequencies only)
-
-X_f = np.zeros_like(vf, dtype=complex)  # create an array of zeros with the same shape as V
-nonzero = frequencies != 0  # boolean mask: true if freq is not zero
-X_f[nonzero] = vf[nonzero] / (1j * 2 * np.pi * frequencies[nonzero])
-
-# choose one of the two for the displacement
-displacement = np.fft.ifft(X_f).real
-interp_displacement = interp1d(tt_data, displacement.real, kind='linear', bounds_error=False, fill_value=0.0)(tt_sim)
-#interp_displacement = interp_displacement[:half]
 
 
 if __name__ == '__main__':
+    f = h5py.File("/Users/letizia/Desktop/INFN/new model/SaSR_test.hdf5", "r")
+    seism = f['SR/V1:ENV_CEB_SEIS_V_dec'][:] #seismic data
+    seism = seism[:end]*1e-6
+    f.close()    
+
+    tt_data = np.linspace(0, T, len(seism))
+    tt_sim = np.arange(0, tmax, dt)
+
+    vf = np.fft.fft(seism)
+    frequencies = np.fft.fftfreq(len(seism), d = 1/62.5)
+    half = len(frequencies) // 2  # half of the frequencies array (positive frequencies only)
+
+    X_f = np.zeros_like(vf, dtype=complex)  # create an array of zeros with the same shape as V
+    nonzero = frequencies != 0  # boolean mask: true if freq is not zero
+    X_f[nonzero] = vf[nonzero] / (1j * 2 * np.pi * frequencies[nonzero])
+
+    # choose one of the two for the displacement
+    displacement = np.fft.ifft(X_f).real
+    interp_displacement = interp1d(tt_data, displacement.real, kind='linear', bounds_error=False, fill_value=0.0)(tt_sim)
+
+
     n_envs = 32
     base_env = SubprocVecEnv([make_env() for _ in range(n_envs)])
     env = VecNormalize(base_env, norm_obs=True, norm_reward=False, clip_obs = 100.0)
-    model = create_sac_model(env, log_path="./sac_control")
+    model = create_sac_model(env, log_path="./sac_test")
     # Test manual logging
-    model.logger.record('test/manual_log', 42.0)
-    model.logger.dump(step=0)
-    print("Manual log written - check if this appears in TensorBoard")
+
+# # Use it before training:
+#     if test_logging_system(model):
+#         print("Logging system is working, proceeding with training...")
+#     else:
+#         print("Logging system has issues, need to debug further")
+
+#     model.logger.record('test/manual_log', 42.0)
+#     model.logger.dump(step=0)
+    #print("Manual log written - check if this appears in TensorBoard")
     model.learn(
-        total_timesteps=1_000_000,
-        callback=callback, 
-        log_interval = 10,
-        tb_log_name="sac_run", 
-        progress_bar=True,    
-        reset_num_timesteps=True )
-    #model.save("testpervederesefunzionatensorboard_2")
+        total_timesteps=500_000,
+        log_interval = 1,
+        callback=callback,
+        progress_bar=True)
+    #model.save("testreward")
     #model.load("sac_pendulum_vertical_increased_timesteps")
     print('Starting evaluation...')
     displacements, inputs, forces, rewards = evaluate_control_performance(model, env)
@@ -247,4 +246,4 @@ if __name__ == '__main__':
     print("Controlled disp stats:", np.min(displacements), np.max(displacements))
     fig = plot_control_results(displacements, inputs, forces, rewards, dt, T)
     plt.show()
-    env.close()
+    base_env.close()
