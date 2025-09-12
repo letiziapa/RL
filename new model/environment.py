@@ -15,10 +15,9 @@ class PendulumVerticalEnv(gym.Env):
         "render_modes": ["human", "rgb_array"],
         "render_fps": 30}
 
-    def __init__(self, seism, interp_displacement, T, dt=1e-3, episode_length=350000, history_length=10000):
+    def __init__(self, interp_displacement, T = 1800, dt=1e-3, episode_length=350000, history_length=10000, seed: Optional[int] = 42):
         super(PendulumVerticalEnv, self).__init__()
         self.interp_displacement = interp_displacement
-        self.seism = seism
         self.dt = dt
         self.T = T 
         self.episode_length = episode_length
@@ -31,7 +30,6 @@ class PendulumVerticalEnv(gym.Env):
         self.M = [160, 125, 82]
         self.K = [700, 1500, 564]
         self.gamma = [5, 5]
-        self.physical_params = [*self.M, *self.K, *self.gamma, self.dt]
 
         self.A, self.B = matrix(*self.M, *self.K, *self.gamma, self.dt)
         self.AR_model = AR_model
@@ -46,10 +44,7 @@ class PendulumVerticalEnv(gym.Env):
         obs_low = np.array([-10.] * 6 , dtype=np.float32)
         obs_high = np.array([10.] * 6 , dtype=np.float32)
         self.observation_space = spaces.Box(obs_low, obs_high, dtype=np.float32)
-        # obs_dim = 6 + 4 #state + 4 additional features
-        # self.observation_space = spaces.Box(
-        #     low = -np.inf, high = np.inf, shape = (obs_dim,), dtype =np.float32
-        # )
+
         self.displacement_history = deque(maxlen = history_length)
         self.input_history = deque(maxlen = history_length)
 
@@ -127,7 +122,7 @@ class PendulumVerticalEnv(gym.Env):
         reward = self._compute_reward()
         #self.history["reward"].append(reward)
         self.current_step += 1
-        terminated = bool(abs(self.output_disp) > 100.0)
+        terminated = bool(abs(self.output_disp) > 100.0) #changed from 100
         truncated = bool(self.current_step >= self.episode_length)
         #done = terminated or truncated
 
@@ -168,17 +163,21 @@ class PendulumVerticalEnv(gym.Env):
         #rms_force = np.sqrt(np.mean(recent_force**2))
 
     
-        if rms_in < 1e-12:
-            return 0.0
-        transfer_ratio = rms_out / rms_in
+        # if rms_in < 1e-12:
+        #     return 0.0
+        # transfer_ratio = rms_out / rms_in
 
-        suppression_reward = -np.log10(transfer_ratio +1e-10) # higher when output < input
-        displacement_penalty = -np.log10(abs(self.output_disp) + 1e-12)
-        alpha = 0.5
+        suppression_reward = -np.log10(rms_out / (rms_in + 1e-12) + 1e-10)
+        #displacement_penalty = -np.log10(abs(self.output_disp) + 1e-12)
+            # stronger penalty for absolute displacement (quadratic is sharper around 0)
+        center_reward = - (self.output_disp**2)
+        #alpha = 0.5 #changed from 0.5
+        alpha, beta = 1.0, 0.1
+        reward = alpha * suppression_reward + beta * center_reward
         #force_penalty = -0.01 * rms_force    # discourage large forces
         #stability_penalty = -10.0 if np.isnan(rms_out) else 0.0  # harsh penalty if unstable
 
-        reward = suppression_reward + alpha * displacement_penalty 
+        #reward = suppression_reward + alpha * displacement_penalty 
 
         return reward
 
