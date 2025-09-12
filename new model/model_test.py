@@ -5,7 +5,43 @@ from stable_baselines3.common.vec_env import SubprocVecEnv, VecNormalize
 from environment import PendulumVerticalEnv
 import matplotlib.pyplot as plt
 from stable_baselines3 import SAC
+from noControl import matrix
 import h5py
+from stable_baselines3.common.callbacks import CallbackList, BaseCallback
+from stable_baselines3.common.logger import configure
+
+np.random.seed(42)
+
+
+class EnhancedLoggingCallback(BaseCallback):
+    def __init__(self, verbose=0):
+        super().__init__(verbose)
+        self.step_count = 0
+        
+    def _on_step(self) -> bool:
+        self.step_count += 1
+        
+        # Log every step
+        if self.step_count % 1 == 0:
+            print(f"Training step: {self.step_count}")
+            
+            # Log buffer size if available
+            if hasattr(self.model, 'replay_buffer') and self.model.replay_buffer.size() > 0:
+                buffer_size = self.model.replay_buffer.size()
+                self.logger.record('train/buffer_size', buffer_size)
+                print(f"Replay buffer size: {buffer_size}")
+            
+            # Log current learning rate
+            if hasattr(self.model, 'learning_rate'):
+                self.logger.record('train/learning_rate', self.model.learning_rate)
+            
+            # Force dump the logs
+            self.logger.dump(step=self.step_count)
+                
+        return True
+
+# Use it in training:
+callback = EnhancedLoggingCallback()
 
 def evaluate_control_performance(model, env, max_steps=100000):  
     env.training = False
@@ -55,14 +91,15 @@ def calculate_tf_rms(output, input_sig, nperseg, dt):
     f, Pxy = signal.csd(output, input_sig, fs=fs, nperseg=nperseg)
     f, Pxx = signal.welch(input_sig, fs=fs, nperseg=nperseg)
     H = (Pxy / (Pxx + 1e-20)) *dt
-    return f, H 
+
+    return f, H
 
 
 def plot_control_results(controlled_disp, input_disp, forces, rewards, dt, T):
     """Comprehensive plotting of control results"""
     freqs, tf = calculate_tf_rms(controlled_disp, input_disp, 2**16, dt)
 
-   # Time axis
+    # Time axis
     t = np.arange(len(controlled_disp)) * dt
     
     fig, axes = plt.subplots(2, 2, figsize=(8, 6))
@@ -105,7 +142,7 @@ def plot_control_results(controlled_disp, input_disp, forces, rewards, dt, T):
     # Suppression ratio
     ax = axes[1, 1]
     # suppression = asd_in / (asd_out + 1e-12)
-    ax.plot(t,rewards, 'cyan', linewidth=2)
+    ax.plot(t, rewards, 'cyan', linewidth=2)
     # ax.axhline(y=1, color='k', linestyle='--', alpha=0.5)
     ax.set_xlabel('Time')
     ax.set_ylabel('Rewards')
@@ -116,88 +153,98 @@ def plot_control_results(controlled_disp, input_disp, forces, rewards, dt, T):
     plt.tight_layout()
     return fig
 
-def create_sac_model(env):    
+def create_sac_model(env, log_path="./sac_control"):    
     model = SAC(
         "MlpPolicy",
         env,
         gamma=0.999,  # Slightly less forward-looking
         learning_rate=3e-4,  # Slower learning for stability
-        buffer_size=500000,  # Smaller buffer
-        learning_starts=10000,  # Start learning earlier
+        buffer_size=500000,  # changed from 500000
+        learning_starts=10000,   #changed from 10000
         batch_size=256,
         tau=0.005,  # Softer target updates
-        ent_coef='auto_0.1',  # Start with higher entropy
+        ent_coef='auto_0.1',  
         target_update_interval=1,
         gradient_steps=1,
         policy_kwargs=dict(
             net_arch=[256, 256, 256]  # Deeper network
         ),
         verbose=1,
-        tensorboard_log="./sac_control/",
+        tensorboard_log=log_path,
+        seed = 42
     )
+    new_logger = configure(log_path, ["stdout", "csv", "tensorboard"])
+    model.set_logger(new_logger)
     
     return model
 
 def make_env():
     def _init():
         return PendulumVerticalEnv(
-            seism, 
-            input_interp, 
-            T=T, 
-            dt=dt, 
-            episode_length=episode_length,
-            history_length = 10000,
+            interp_displacement, 
+            T = T, 
+            dt = dt, 
+            episode_length = episode_length,
+            history_length = 1000,
+            seed = 42,
             )
     return _init
 
-T = 1000
+T = 1800
 dt = 1e-3
 Nt_step = T * 1e3
 tmax = Nt_step * dt  
 end = int(T * 62.5)
 nperseg = 2**16
+episode_length = T*1e3
 
-episode_length = 1000000  
 f = h5py.File("/Users/letizia/Desktop/INFN/new model/SaSR_test.hdf5", "r")
 seism = f['SR/V1:ENV_CEB_SEIS_V_dec'][:] #seismic data
 seism = seism[:end]*1e-6
-f.close()
-
+f.close()    
 
 tt_data = np.linspace(0, T, len(seism))
 tt_sim = np.arange(0, tmax, dt)
 
 vf = np.fft.fft(seism)
 frequencies = np.fft.fftfreq(len(seism), d = 1/62.5)
-half = len(frequencies) // 2 #half of the frequencies array (positive frequencies only)
+half = len(frequencies) // 2  # half of the frequencies array (positive frequencies only)
 
-xf = vf[1:] / (1j * 2 * np.pi * frequencies[1:]) # Fourier Transform of the seismic data
-X_f = np.zeros_like(vf, dtype=complex) #create an array of zeros with the same shape as V
-nonzero = frequencies != 0 #boolean mask: true if freq is not zero
+X_f = np.zeros_like(vf, dtype=complex)  # create an array of zeros with the same shape as V
+nonzero = frequencies != 0  # boolean mask: true if freq is not zero
 X_f[nonzero] = vf[nonzero] / (1j * 2 * np.pi * frequencies[nonzero])
 
-#choose one of the two for the displacement
-zt = np.fft.ifft(X_f).real
-xt = np.fft.ifft(xf).real 
+# choose one of the two for the displacement
+displacement = np.fft.ifft(X_f).real
+interp_displacement = interp1d(tt_data, displacement.real, kind='linear', bounds_error=False, fill_value=0.0)(tt_sim)
+#interp_displacement = interp_displacement[:half]
 
-# fVel, psdVel = signal.welch(seism.real, fs = 62.5, window='hann', nperseg=nperseg)
-# fZ, psdZ = signal.welch(xt.real, fs = 62.5, window='hann', nperseg=nperseg)
 
-input_interp = interp1d(tt_data, zt.real, kind='linear', bounds_error=False, fill_value=0.0)(tt_sim)
 if __name__ == '__main__':
     n_envs = 32
     base_env = SubprocVecEnv([make_env() for _ in range(n_envs)])
-    env = VecNormalize(base_env, norm_obs=True, norm_reward=False, clip_obs=100.0)
-    model = create_sac_model(env)
-    #model.learn(total_timesteps=1000000, progress_bar = True)
-    #model.save("sac_pendulum_vertical_xt_modifiedreward")
-    model.load("sac_pendulum_vertical_xt_modifiedreward")
+    env = VecNormalize(base_env, norm_obs=True, norm_reward=False, clip_obs = 100.0)
+    model = create_sac_model(env, log_path="./sac_control")
+    # Test manual logging
+    model.logger.record('test/manual_log', 42.0)
+    model.logger.dump(step=0)
+    print("Manual log written - check if this appears in TensorBoard")
+    model.learn(
+        total_timesteps=1_000_000,
+        callback=callback, 
+        log_interval = 10,
+        tb_log_name="sac_run", 
+        progress_bar=True,    
+        reset_num_timesteps=True )
+    #model.save("testpervederesefunzionatensorboard_2")
+    #model.load("sac_pendulum_vertical_increased_timesteps")
     print('Starting evaluation...')
     displacements, inputs, forces, rewards = evaluate_control_performance(model, env)
     print(f"Evaluation complete.")
     print(f"Output displacement: {displacements.shape}")
     print(f"Forces: {forces.shape}")
     print(f"Rewards: {rewards.shape}")
+    print("Controlled disp stats:", np.min(displacements), np.max(displacements))
     fig = plot_control_results(displacements, inputs, forces, rewards, dt, T)
     plt.show()
     env.close()
