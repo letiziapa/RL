@@ -130,7 +130,7 @@ class PendulumVerticalEnv(gym.Env):
         rms_reward = -np.log1p(mean_rms.real + 1e-12)  #avoid log(0)
 
         center_reward = -np.log1p(abs(self.output_disp))
-        alpha, beta = 1.0, 1.0
+        alpha, beta = 1.5, 1.5 #changed from beta = 1.5 (which is the data in 2309_changereward.txt)
         reward = alpha * rms_reward + beta * center_reward
         return reward
 

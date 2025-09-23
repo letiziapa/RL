@@ -34,7 +34,7 @@ class LoggingCallback(BaseCallback):
 # Use it in training:
 callback = LoggingCallback()
 
-def evaluate_control_performance(model, env, max_steps=50_000):  
+def evaluate_control_performance(model, env, max_steps=500_000):  
     env.training = False
     if hasattr(env, 'norm_reward'):
         env.norm_reward = False
@@ -229,13 +229,12 @@ if __name__ == '__main__':
         log_interval = 1,
         callback=callback,
         progress_bar=True)
-    #model.save("testreward")
-    #model.load("sac_pendulum_vertical_increased_timesteps")
+    model.save("2309_model")
+    #model.load("2309_changereward_model")
     print('Starting evaluation...')
-    filename = "2309.txt"
+    filename = "2309_changereward_500msteps.txt"
     outputs, inputs, forces, rewards = evaluate_control_performance(model, env)
     #freqs, abs_tf = calculate_tf_rms(outputs, inputs, half, dt)
-    #np.savetxt(filename, np.column_stack((freqs, abs_tf, outputs, inputs)), header='Frequency(Hz) |H(f)| output input')
     mean_outputs = outputs.mean(axis=1)
     mean_inputs = inputs.mean(axis=1)
     mean_forces = forces.mean(axis=1)
@@ -247,9 +246,7 @@ if __name__ == '__main__':
     print(f"Evaluation complete.")
     print(f"Output displacement: {outputs.shape}")
     print(f"Forces: {forces.shape}")
-    print(f"Rewards: {rewards.shape}")
-    # print("Controlled disp stats:", np.min(outputs), np.max(outputs))
-    # t = np.arange(len(outputs)) * dt  
+    print(f"Rewards: {rewards.shape}")  
     print("Controlled disp stats:", np.min(mean_outputs), np.max(mean_outputs))
     t = np.arange(len(mean_outputs)) * dt      
     
