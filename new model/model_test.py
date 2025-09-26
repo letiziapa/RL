@@ -177,6 +177,7 @@ def make_env():
             dt = dt, 
             episode_length = episode_length,
             history_length = history_length,
+            options = 'log',
             seed = 42,
             )
     return _init
@@ -229,10 +230,10 @@ if __name__ == '__main__':
         log_interval = 1,
         callback=callback,
         progress_bar=True)
-    model.save("2309_model")
-    #model.load("2309_changereward_model")
+    model.save("2609_model")
+    #model.load("2509_model")
     print('Starting evaluation...')
-    filename = "2309_changereward_500msteps.txt"
+    filename = "2609_file.txt"
     outputs, inputs, forces, rewards = evaluate_control_performance(model, env)
     #freqs, abs_tf = calculate_tf_rms(outputs, inputs, half, dt)
     mean_outputs = outputs.mean(axis=1)
@@ -248,14 +249,14 @@ if __name__ == '__main__':
     print(f"Forces: {forces.shape}")
     print(f"Rewards: {rewards.shape}")  
     print("Controlled disp stats:", np.min(mean_outputs), np.max(mean_outputs))
-    t = np.arange(len(mean_outputs)) * dt      
+    t = np.arange(len(mean_outputs)) * dt     
     
     fig, axes = plt.subplots(2, 2, figsize=(8, 6))
     
     # 1. Time domain comparison
     ax = axes[0, 0]
     #ax.plot(t, outputs, 'b-', alpha=0.7, label='Output')
-    #ax.plot(t, inputs, 'r-', alpha=0.7, label='Controlled Input')
+    #ax.plot(t, inputs, 'r-', alpha=0.7, label='Controlled Input')  
     ax.plot(t, mean_outputs, 'b-', alpha=0.7, label='Mean Output')
     ax.plot(t, mean_inputs, 'r-', alpha=0.7, label='Mean Input')
     ax.set_xlabel('Time [s]')

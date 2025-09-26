@@ -17,7 +17,7 @@ class PendulumVerticalEnv(gym.Env):
         "render_modes": ["human", "rgb_array"],
         "render_fps": 30}
 
-    def __init__(self, interp_displacement, T = 1800, dt=1e-3, episode_length=350000, history_length=10000, seed: Optional[int] = 42):
+    def __init__(self, interp_displacement, T = 1800, dt=1e-3, episode_length=350000, history_length=10000, options = 'log', seed: Optional[int] = 42):
         super(PendulumVerticalEnv, self).__init__()
         self.interp_displacement = interp_displacement
         self.dt = dt
@@ -25,6 +25,7 @@ class PendulumVerticalEnv(gym.Env):
         self.episode_length = episode_length
         self.current_step = 0
         self.history_length = history_length
+        self.options = options
         self.history = {"x6": [], "v6": [], "step": [], "force": [], "reward": []}
         self.max_force_mag = 5.0 
         
@@ -86,7 +87,7 @@ class PendulumVerticalEnv(gym.Env):
         self.output_disp = self.state[5]  # vertical displacement
         self.displacement_history.append(self.output_disp)
 
-        reward = self._compute_reward()
+        reward = self._compute_reward(self.options)
         self.current_step += 1
         terminated = bool(abs(self.output_disp) >= 10.0) #changed from 100
         truncated = bool(self.current_step > self.episode_length)
@@ -100,7 +101,7 @@ class PendulumVerticalEnv(gym.Env):
         }
         return obs, reward, terminated, truncated, info
  
-    def _compute_reward(self):
+    def _compute_reward(self, options = 'log'):
         #evaluate over multiple timesteps
         if self.current_step < 100:
             return 0.0
@@ -127,10 +128,20 @@ class PendulumVerticalEnv(gym.Env):
        
         rms = np.flip(np.sqrt(var))
         mean_rms = np.mean(rms)  
-        rms_reward = -np.log1p(mean_rms.real + 1e-12)  #avoid log(0)
+        if options == 'log':
+            center_reward = -np.log1p(abs(self.output_disp))
+            rms_reward = -np.log1p(mean_rms.real + 1e-12)
+            
+        elif options == 'inverse':
+            center_reward = 1.0 / (1.0 + self.output_disp**2)
+            rms_reward = 1.0 / (1.0 + mean_rms.real) 
+      
 
-        center_reward = -np.log1p(abs(self.output_disp))
-        alpha, beta = 1.5, 1.5 #changed from beta = 1.5 (which is the data in 2309_changereward.txt)
+        #center_reward = - (self.output_disp ** 2)
+
+        alpha, beta = 0.5, 0.5
+        # rms_reward /= (np.abs(rms_reward).max() + 1e-10) 
+        # center_reward /= (np.abs(center_reward).max() + 1e-10)
         reward = alpha * rms_reward + beta * center_reward
         return reward
 
