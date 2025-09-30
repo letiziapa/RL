@@ -78,25 +78,28 @@ class PendulumVerticalEnv(gym.Env):
         
         self.control_force = float(action[0]*self.max_force_mag)
         seismic_input = self.interp_displacement[self.current_step]
-        self.input_history.append(seismic_input)
 
         force = self.K[0] * np.real(seismic_input) + self.control_force
         
         self.state = self.AR_model(self.state, self.A, self.B, force)
 
-        self.output_disp = self.state[5]  # vertical displacement
+        self.input_disp = self.state[0]  # vertical displacement at the top mass
+        self.output_disp = self.state[5]  # vertical displacement at the bottom mass
+        
         self.displacement_history.append(self.output_disp)
+        self.input_history.append(self.input_disp)
 
         reward = self._compute_reward(self.options)
         self.current_step += 1
-        terminated = bool(abs(self.output_disp) >= 10.0) #changed from 100
+
+        terminated = bool(abs(self.output_disp) >= 10.0) 
         truncated = bool(self.current_step > self.episode_length)
 
         obs = self._get_obs()
         info = {
             'displacement': self.output_disp,
             'force': self.control_force,
-            'seismic_input': seismic_input,
+            'seismic_input': self.input_disp,
             'rewards': reward
         }
         return obs, reward, terminated, truncated, info
@@ -105,7 +108,6 @@ class PendulumVerticalEnv(gym.Env):
         #evaluate over multiple timesteps
         if self.current_step < 100:
             return 0.0
-        
         recent_out = np.array(list(self.displacement_history))
         recent_in = np.array(list(self.input_history))
 
@@ -116,9 +118,6 @@ class PendulumVerticalEnv(gym.Env):
         trfn = (out_freq / in_freq + 1e-10) * self.dt
         
         freqs, Pxx = signal.welch(recent_in, fs=1/self.dt, window='hann', nperseg=min(112499, len(recent_in)))
-        
-        #frequencies = np.fft.fftfreq(len(recent_in), d=self.dt)
-        #print(f'freq {len(frequencies)}')
         half = len(freqs) // 2
         df = np.diff(freqs[1:half])
         
@@ -131,30 +130,34 @@ class PendulumVerticalEnv(gym.Env):
         if options == 'log':
             center_reward = -np.log1p(abs(self.output_disp))
             rms_reward = -np.log1p(mean_rms.real + 1e-12)
-            
+            #ratio_reward = np.abs(input_sig) / (np.abs(self.output_disp) +1e-12)
+
         elif options == 'inverse':
             center_reward = 1.0 / (1.0 + self.output_disp**2)
             rms_reward = 1.0 / (1.0 + mean_rms.real) 
       
 
         #center_reward = - (self.output_disp ** 2)
+        # if abs(self.output_disp) >= self.interp_displacement[self.current_step]:
+        #     bonus = -20.0
+        # else:
+        #     bonus = 50.0
+        #bonus = 10 * (np.abs(self.interp_displacement[self.current_step]) - np.abs(self.output_disp))
 
-        alpha, beta = 0.5, 0.5
+        alpha, beta, gamma = 0.5, 0.5, 0.1
         # rms_reward /= (np.abs(rms_reward).max() + 1e-10) 
         # center_reward /= (np.abs(center_reward).max() + 1e-10)
-        reward = alpha * rms_reward + beta * center_reward
+        reward = alpha * rms_reward + beta * center_reward #+ gamma * ratio_reward
         return reward
 
 
     def render(self, mode='human'):        
         print(f"""
         Step: {self.current_step}
-        x6: {self.state[5]:.6e} m
-        v6: {self.state[2]:.6e} m/s
-        Control Force: {self.history['force'][-1] if self.history['force'] else 0:.3f} N
+        Input: {self.interp_displacement[self.current_step]:.6e} m
+        Input (controlled): {self.input_disp:.6e} m
+        Output: {self.state[5]:.6e} m
         Differential displacement: {self.state[5] - (self.history["x6"][-2] if len(self.history["x6"]) >= 2 else 0):.6e} m
-        Seismic Input: {self.interp_displacement[self.current_step]:.6e} m
-        Reward: {self.history["reward"][-1] if self.history["reward"] else 0:.4f}
         """)
 if __name__ == '__main__':
     T = 1000
@@ -202,8 +205,8 @@ if __name__ == '__main__':
     for step in range(10000):  # run for 10 steps
         action = test_env.action_space.sample()  # random action
         obs, reward, terminated, truncated, info = test_env.step(action)
-        print(f"Step {step}: obs={obs}, reward={reward:.3f}, done={terminated or truncated}")
-        
+        print(f"Step {step}: obs={obs[5]}, reward={reward:.3f}, done={terminated or truncated}")
+        test_env.render()
         if terminated or truncated:
             print("Episode finished, resetting...")
             obs, info = test_env.reset()
