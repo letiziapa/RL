@@ -17,6 +17,15 @@ class LoggingCallback(BaseCallback):
         super().__init__()
         
     def _on_step(self) -> bool:
+        """
+        Callback function called at each training step.
+        Logs the current number of timesteps every 1000 steps. If the model has a replay buffer,
+        it also logs the current buffer size and prints it to the console. 
+        Dumps the logger at each logging interval.
+
+        Returns:
+            bool: Always returns True to indicate the callback should continue.
+        """
         if self.num_timesteps % 1000 == 0:
             self.logger.record('train/timesteps', self.num_timesteps)
             
@@ -31,10 +40,33 @@ class LoggingCallback(BaseCallback):
                 
         return True
 
-# Use it in training:
+#callback during training
 callback = LoggingCallback()
 
-def evaluate_control_performance(model, env, max_steps=500_000):  
+def evaluate_control_performance(model, env, max_steps=100_000):  
+    """
+    Evaluates the performance of a control model in a given environment over a single episode.
+    This function runs the provided model in the environment for up to `max_steps` steps or until the first episode ends.
+    It collects and returns the displacements, seismic inputs, forces, and rewards at each step for all parallel environments.
+    
+    Parameters:
+        model: The control model with a `predict` method, used to select actions based on observations.
+        env: The environment in which to evaluate the model. Must support vectorized operations and provide info dicts with
+        'displacement', 'seismic_input', and 'force' keys.
+        max_steps (int, optional): Maximum number of steps to run the evaluation. Defaults to 500,000.
+    
+    Returns:
+        all_displacements (np.ndarray): Array of displacements with shape (steps, n_envs).
+        all_inputs (np.ndarray): Array of seismic inputs with shape (steps, n_envs).
+        all_forces (np.ndarray): Array of forces with shape (steps, n_envs).
+        all_rewards (np.ndarray): Array of rewards with shape (steps, n_envs).
+
+    Notes:
+        - The function disables training and reward normalization in the environment if applicable.
+        - Only the first episode is evaluated, even if the environment supports multiple parallel environments.
+        - Prints progress and sample statistics during evaluation.
+    """
+
     env.training = False
     if hasattr(env, 'norm_reward'):
         env.norm_reward = False
@@ -70,14 +102,13 @@ def evaluate_control_performance(model, env, max_steps=500_000):
             break
     print(f"Collected {len(all_displacements)} steps from envs (one episode).")
 
-    # Average across episodes
-        # Convert lists to numpy arrays with shape (steps, n_envs)
+    #Convert lists to numpy arrays with shape (steps, n_envs)
     all_displacements = np.array(all_displacements)
     all_inputs = np.array(all_inputs)
     all_forces = np.array(all_forces)
     all_rewards = np.array(all_rewards)
     
-    # Average across environments
+    #Average across environments
     mean_displacements = np.mean(all_displacements, axis=1)
 
     print(f"Sample controlled displacements: {all_displacements[600:620, 0]}")
@@ -85,10 +116,25 @@ def evaluate_control_performance(model, env, max_steps=500_000):
     print(f"\nMean displacement: {mean_displacements.mean()}")
     print(f"\nSample rewards: {all_rewards[600:620, 0]}")
     
-    return all_displacements, all_inputs, all_forces, all_rewards  # Return arrays with shape (steps, n_envs)
+    return all_displacements, all_inputs, all_forces, all_rewards  
 
 def calculate_tf_rms(output, input_sig, dt):
-    """Calculate transfer function using FFT"""
+    """
+    Calculates the transfer function magnitude between an output and input signal using the Fast Fourier Transform (FFT).
+    
+    Parameters:
+        output (array): The output signal in the time domain.
+        input_sig (array): The input signal in the time domain.
+        dt (float): The time step between samples.
+    
+    Returns:
+        freqs (numpy.ndarray): Array of frequency bins corresponding to the FFT.
+        abs_trfn_windowed (numpy.ndarray): Magnitude of the transfer function at each frequency bin.
+    
+    Notes:
+        - The transfer function is computed as the ratio of the FFT of the output to the FFT of the input, scaled by the time step.
+        - The function returns the absolute value (magnitude) of the transfer function.
+    """
 
     freqs = np.fft.fftfreq(len(input_sig), d=dt)
     output_windowed = np.fft.fft(output )
@@ -100,12 +146,33 @@ def calculate_tf_rms(output, input_sig, dt):
 
 
 def plot_control_results(controlled_disp, input_disp, forces, rewards, dt):
-    """Comprehensive plotting of control results"""
+    """
+    Plot results generated from the RL control system.
+    This function generates a 2x2 grid of subplots to visualize various aspects of a control system's performance:
+        1. Time domain comparison of controlled and input displacements.
+        2. Forces applied over time.
+        3. Transfer function magnitude (requires 'freqs' and 'abs_tf').
+        4. Rewards over time.
+    
+    Parameters:
+        controlled_disp (array): The displacement values resulting from the control system.
+        input_disp (array): The input displacement values (reference or desired).
+        forces (array): The force values applied by the controller.
+        rewards (array): The reward values at each time step (e.g., for reinforcement learning).
+        dt (float): Time step between samples, used to generate the time axis.
+
+    Returns:
+        fig (matplotlib.figure): The matplotlib Figure object containing the subplots.
+    Notes:
+        - The function assumes that `freqs` and `abs_tf` are available in the global or calling scope for the transfer function subplot.
+        - All input arrays must have the same length.
+    """
+
     t = np.arange(len(controlled_disp)) * dt    
     
     fig, axes = plt.subplots(2, 2, figsize=(8, 6))
     
-    # 1. Time domain comparison
+    #Comparison of input and output displacements
     ax = axes[0, 0]
     ax.plot(t, controlled_disp, 'b-', alpha=0.7, label='Controlled')
     ax.plot(t, input_disp, 'r-', alpha=0.7, label='Input')
@@ -115,7 +182,7 @@ def plot_control_results(controlled_disp, input_disp, forces, rewards, dt):
     ax.legend()
     ax.grid(True, alpha=0.3)
     
-    # # 2. forces
+    #Force applied over time
     ax = axes[0, 1]
     ax.plot(t, forces, 'b-', label='force')
     ax.set_xlabel('Time')
@@ -123,7 +190,7 @@ def plot_control_results(controlled_disp, input_disp, forces, rewards, dt):
     ax.legend()
     ax.grid(True, which='both', alpha=0.3)
     
-    # 3. Transfer function magnitude
+    #Transfer function magnitude
     ax = axes[1, 0]
     ax.loglog(abs(freqs), abs_tf, 'g-', linewidth=2)
     ax.axhline(y=1, color='k', linestyle='--', alpha=0.5, label='Unity')
@@ -133,7 +200,7 @@ def plot_control_results(controlled_disp, input_disp, forces, rewards, dt):
     ax.legend()
     ax.grid(True, which='both', alpha=0.3)
     
-    #rewards
+    #Rewards over time
     ax = axes[1, 1]
     ax.plot(t, rewards, 'cyan', linewidth=2)
     ax.set_xlabel('Time')
@@ -145,6 +212,19 @@ def plot_control_results(controlled_disp, input_disp, forces, rewards, dt):
     return fig
 
 def create_sac_model(env, log_path="./sac_control"):    
+    """
+    Creates and configures a Soft Actor-Critic (SAC) model for reinforcement learning.
+    Args:
+        env (gym.Env): The environment to train the agent on.
+        log_path (str, optional): Path for logging and tensorboard summaries. Defaults to "./sac_control".
+    Returns:
+        model: An instance of the SAC model configured with the specified parameters.
+    Notes:
+        - The variables 'lr', 'buffer_size', 'learning_starts', 'batch_size', and 'tau' need to be defined.
+        - The model uses an MLP policy with three hidden layers of 256 units each, but can be changed.
+        - Logging is set up for stdout, CSV, and TensorBoard.
+        - The random seed is set to 42 for reproducibility.
+    """
     model = SAC(
         "MlpPolicy",
         env,
@@ -154,11 +234,11 @@ def create_sac_model(env, log_path="./sac_control"):
         learning_starts=learning_starts,   #changed from 10000
         batch_size=batch_size,  # changedfrom 256
         tau=tau,  # changed from 0.005
-        ent_coef='auto_0.1',  
+        ent_coef='auto',  
         target_update_interval=1,
         gradient_steps=1,
         policy_kwargs=dict(
-            net_arch=[256, 256, 256]  # Deeper network
+            net_arch=[256, 256, 256]  
         ),
         verbose=1,
         tensorboard_log=log_path,
@@ -170,6 +250,24 @@ def create_sac_model(env, log_path="./sac_control"):
     return model
 
 def make_env():
+    """
+    Creates an environment initializer function for the PendulumVerticalEnv.
+
+    Returns:
+    function: A function that, when called, returns an instance of PendulumVerticalEnv 
+    initialized with the specified parameters:
+        - interp_displacement: displacement input (interpolated).
+        - T: Total time.
+        - dt: Time step.
+        - episode_length: Length of each episode.
+        - history_length: Length of the observation history.
+        - options: Choice of reward function. Set to 'log' (see 'environment.py' for details).
+        - seed: Set to 42 for reproducibility.
+
+    Note:
+        The parameters interp_displacement, T, dt, episode_length, and history_length
+        must be defined by the user.
+    """
     def _init():
         return PendulumVerticalEnv(
             interp_displacement, 
@@ -190,6 +288,7 @@ end = int(T * 62.5)
 nperseg = 2**16
 episode_length = T*1e3
 history_length = 1000
+timesteps = 500_000   
 
 tau = 0.001
 batch_size = 256
@@ -217,8 +316,8 @@ displacement = np.fft.ifft(X_f).real
 interp_displacement = interp1d(tt_data, displacement.real, kind='linear', bounds_error=False, fill_value=0.0)(tt_sim)
 #interp_displacement = interp_displacement[:half]
 if __name__ == '__main__':
-
     n_envs = 32
+    #Create vectorized environment with 32 parallel instances
     base_env = SubprocVecEnv([make_env() for _ in range(n_envs)])
     env = VecNormalize(base_env, norm_obs=True, norm_reward=False, clip_obs = 100.0)
     model = create_sac_model(env, log_path="./sac_test")
@@ -226,16 +325,16 @@ if __name__ == '__main__':
     print(f'Learning rate: {lr} \nBatch size: {batch_size} \nTau: {tau} \nBuffer size: {buffer_size} \nLearning starts: {learning_starts}')
 
     model.learn(
-        total_timesteps=500_000,
+        total_timesteps=timesteps,
         log_interval = 1,
         callback=callback,
         progress_bar=True)
-    model.save("2609_model")
+    
+    model.save("2909_model")
     #model.load("2509_model")
     print('Starting evaluation...')
-    filename = "2609_file.txt"
+    filename = "2909_file.txt"
     outputs, inputs, forces, rewards = evaluate_control_performance(model, env)
-    #freqs, abs_tf = calculate_tf_rms(outputs, inputs, half, dt)
     mean_outputs = outputs.mean(axis=1)
     mean_inputs = inputs.mean(axis=1)
     mean_forces = forces.mean(axis=1)
@@ -253,10 +352,8 @@ if __name__ == '__main__':
     
     fig, axes = plt.subplots(2, 2, figsize=(8, 6))
     
-    # 1. Time domain comparison
+    #(controlled) input and output displacements
     ax = axes[0, 0]
-    #ax.plot(t, outputs, 'b-', alpha=0.7, label='Output')
-    #ax.plot(t, inputs, 'r-', alpha=0.7, label='Controlled Input')  
     ax.plot(t, mean_outputs, 'b-', alpha=0.7, label='Mean Output')
     ax.plot(t, mean_inputs, 'r-', alpha=0.7, label='Mean Input')
     ax.set_xlabel('Time [s]')
@@ -265,7 +362,7 @@ if __name__ == '__main__':
     ax.legend()
     ax.grid(True, alpha=0.3)
     
-    # # 2. forces
+    #forces applied
     ax = axes[0, 1]
     ax.plot(t, mean_forces, 'b-', label='force')
     ax.set_xlabel('Time')
@@ -274,7 +371,7 @@ if __name__ == '__main__':
     ax.legend()
     ax.grid(True, which='both', alpha=0.3)
     
-    # 3. Transfer function magnitude
+    #Transfer function magnitude
     ax = axes[1, 0]
     ax.loglog(abs(freqs), abs_tf, 'g-', linewidth=2)
     ax.axhline(y=1, color='k', linestyle='--', alpha=0.5, label='Unity')
