@@ -12,7 +12,12 @@ np.random.seed(42)
 
 #structure of the hdf5 object 
 def print_hdf5_structure(obj, indent=0):
-    """Stampa ricorsivamente la struttura di un file HDF5"""
+    """Print a hierarchical structure of an HDF5 file.
+    
+    Parameters:
+        obj: An h5py.File or h5py.Group object.
+        indent: Current indentation level (used for recursive calls).
+    """
     for key in obj:
         print(" " * indent + f"📂 {key}")
         if isinstance(obj[key], h5py.Group):
@@ -26,7 +31,6 @@ def print_items(dset):
     for key, value in dset.attrs.items():
         print(f"{key}: {value}")
 
-#--------------------------Channels---------------------------#
 tower = 'SR'
 channels = ['V1:Sa_' + tower + '_F0_LVDT_V_500Hz',
             'V1:Sa_' + tower + '_F1_LVDT_V_500Hz', 
@@ -35,20 +39,15 @@ channels = ['V1:Sa_' + tower + '_F0_LVDT_V_500Hz',
             'V1:Sa_' + tower + '_F4_LVDT_V_500Hz']                
             #not considering F7
 
-#required data
-#f = h5py.File("SaSR_test.hdf5", "r")
-#with open("SaSR_test.hdf5", "r") as f:
 f = h5py.File("/Users/letizia/Desktop/INFN/new model/SaSR_test.hdf5", "r")
 dset = f['SR/V1:ENV_CEB_SEIS_V_dec']
 seism = f['SR/V1:ENV_CEB_SEIS_V_dec'][:] #seismic data
-#seism = seism[2000:] #remove the first 2000 samples 
-seism = seism[:14000] *1e-6
-#print(seism[2000:2050])
+seism = seism * 1e-6
 
 #constants
 nperseg = 2 ** 16 #samples per segment (useful for the PSD)
 
-T = 224 #since we have removed the first 2000 samples, the signal duration is reduced
+T = 1800 
 t = np.linspace(0, T, len(seism)) #time vector
 
 #parameter to be used in the time evolution
@@ -57,7 +56,6 @@ dt = 1e-3 #time step
 
 #take the fourier transform of the data
 vf = np.fft.fft(seism)
-
 
 frequencies = np.fft.fftfreq(len(seism), d = 1/62.5)
 half = len(frequencies) // 2 #half of the frequencies array (positive frequencies only)
@@ -70,6 +68,7 @@ nonzero = frequencies != 0 #boolean mask: true if freq is not zero
 X_f[nonzero] = vf[nonzero] / (1j * 2 * np.pi * frequencies[nonzero])
 
 zt = np.fft.ifft(X_f).real
+
 xt = np.fft.ifft(xf)  # inverse Fourier Transform to get the displacement
 #print(xt)
 #print(zt)
@@ -85,6 +84,17 @@ fZ, psdZ = signal.welch(xt.real, fs = 62.5, window='hann', nperseg=nperseg)
 
 
 def force_function(t, k, displacement):
+    """
+    Calculates the force exerted by a spring based on the displacement.
+
+    Parameters:
+        t (float): Current time (not used in the calculation, but included for the time evolution method).
+        k (float): Spring constant (depends on the system).
+        displacement (complex or float): The displacement of the spring. Can be a complex number.
+
+    Returns:
+        float: The real part of the force calculated as k times the real part of the displacement.
+    """
     return k * np.real(displacement)
 
 def evolution(evol_method, Nt_step, dt, physical_params, signal_params,
@@ -93,47 +103,35 @@ def evolution(evol_method, Nt_step, dt, physical_params, signal_params,
     Simulates the temporal evolution of the system under the influence of an
     external force.
 
-    Parameters
-    ----------
-    evol_method : function
-        The function used to evolve the system (e.g. Euler or ARMA methods).
-    Nt_step : int
-        The number of temporal steps to simulate.
-    dt : float
-        The time step size.
-    physical_params : list
-        The list of physical parameters for the system.
-    signal_params : list
-        The list of parameters for the external force signal.
-    F : function
-        The function modeling the external force.
-    file_name : str, optional
-        The name of the file to save simulation data. Default is None.
+    Parameters:
+        evol_method (function): The function used to calculate the time evolution of the system (e.g. Euler or ARMA).
+        Nt_step (int): The number of temporal steps to simulate.
+        dt (float): The time step size.
+        physical_params (list): The list of physical parameters for the system.
+        signal_params (list): The list of parameters for the external force signal.
+        F (function): The function modeling the external force.
+        file_name (str, optional): The name of the file to save simulation data. Default is None.
 
-    Returns
-    -------
-    tuple
-        A tuple containing the time grid and the arrays of velocities
-        and positions for each mass.
+    Returns:
+        tuple: A tuple containing the time grid and the arrays of velocities and positions for each mass.
     """
-    # Initialize the problem
-    tmax = Nt_step * dt  # maximum time
-    tt = np.arange(0, tmax, dt)  # time grid
+    #initialise the problem
+    tmax = Nt_step * dt  #maximum time
+    tt = np.arange(0, tmax, dt)  #time grid
     y0 = np.array(
-        (0, 0, 0, 0., 0., 0.))  # initial condition
-    y_t = np.copy(y0)  # create a copy to evolve it in time
-    #run the simulation on the finer time grid
-    F_signal = F(tt, *signal_params)  # external force applied over time (cambia)
+        (0, 0, 0, 0., 0., 0.))  #initial condition: set all velocities and positions to zero
+    y_t = np.copy(y0)  #create a copy to evolve it in time
 
+    F_signal = F(tt, *signal_params)  # external force applied over time 
 
-    # Initialize lists for velocities and positions
+    #initialise lists for velocities and positions
     v1, v2, v6 = [[], [], []]
     x1, x2, x6 = [[], [], []]
 
-    # compute the system matrices
+    #compute the system matrices
     A, B = matrix(*physical_params)
 
-    # time evolution when the ext force is applied
+    #time evolution when the external force is applied
     i = 0
     for t in tt:
         Fi = F_signal[i]  # evaluate the force at time t
@@ -155,8 +153,9 @@ def evolution(evol_method, Nt_step, dt, physical_params, signal_params,
 
     return (tt, np.array(v1), np.array(v2), np.array(v6), np.array(x1), np.array(x2), np.array(x6))
 
-# temporal steps (for simulation)
+#temporal steps (for simulation)
 Nt_step = T * 1e3
+
 #physical parameters of the system
 gamma = [5, 5]  # viscous friction coeff [kg/m*s]
 M = [160, 125, 82]  # filter mass [Kg]
@@ -168,94 +167,47 @@ wn = 2*np.pi*frequencies[:half]
 
 physical_params = [*M, *K, *gamma, dt]
 
-# Interpolate the acceleration onto the simulation time grid
-# Time vector for seismic data (real data)
-tt_data = np.arange(0, T, 1 / 62.5)  
+#Interpolate the acceleration onto the simulation time grid
 
-# Time vector for simulation
+#time vector for seismic data (real data)
+tt_data = np.arange(0, T, 1 / 62.5)  
+#time vector for simulation
 tmax = Nt_step * dt  
 tt_sim = np.arange(0, tmax, dt)
 
+#interpolate acceleration
 interp_acc = interp1d(tt_data, At, kind='linear', bounds_error=False, fill_value=0.0)
 At_interp = interp_acc(tt_sim)
 
+#interpolate displacement data
 interp_displacement = interp1d(tt_data, zt, kind='linear', bounds_error=False, fill_value=0.0)
 zt_interp = interp_displacement(tt_sim)
 
-simulation_params = [AR_model, Nt_step, dt] 
-#signal_params = [M[0], At] 
+simulation_params = [AR_model, Nt_step, dt]  
 signal_params = [K[0], zt_interp] 
 
+#calculate the time evolution of the system under the seismic input
 tt, v1, v2, v6, x1, x2, x6 = (
                         evolution(*simulation_params, physical_params, signal_params,
                         F, file_name = None))
 
+#calculate the theoretical transfer function (from model, no data)
 Tf, poles = TransferFunc(wn, *M, *K, *gamma)
-# Compute the magnitude of the transfer function (from simulation)
+#compute the magnitude of the transfer function (from simulation)
 H = (np.real(Tf) ** 2 + np.imag(Tf) ** 2) ** (1 / 2)
 
 #apply a Hanning window to the data to remove spectral leakage
 window = np.hanning(len(seism))
 
+#interplate signal back to match data time grid
 x6_interp = interp1d(tt_sim, x6, kind='linear', bounds_error=False, fill_value=0.0)(tt_data)
 v6_interp = interp1d(tt_sim, v6, kind='linear', bounds_error=False, fill_value=0.0)(tt_data)
 
-A, B = matrix(*M, *K, *gamma, dt)  # system matrices
-print(A.shape, B.shape) 
-action_space = spaces.Box(
-            low=-1.0,
-            high=1.0,
-            shape=(1,),
-            dtype=np.float32
-        )
-observation_space = spaces.Discrete(10)
-vout, xout = [], []  # lists to store the output signals
 
-
-start = time.time()
-
-
-i = 0
-state = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float32)
-force = force_function(tt_sim, K[0], zt_interp)  # external force applied over time
-for t in tt_sim:
-    Fi = force[i] 
-    i = i + 1
-    state = AR_model(state, A, B, Fi)
-    #state = np.array([v1, v2, v6, x1, x2, x6], dtype=np.float32)  # update the state
-    vout.append(state[2])
-    xout.append(state[5])
-vout_interp = interp1d(tt_sim, vout, kind='linear', bounds_error=False, fill_value=0.0)(tt_data)
-xout_interp = interp1d(tt_sim, xout, kind='linear', bounds_error=False, fill_value=0.0)(tt_data)
-
-end = time.time()
-
-print(f"Simulation time: {end - start:.3f} seconds")
-
-    #print(f'\nAction {i}: {action}, State: {state}')
-# print(action_space)
-# action1 = (action_space.sample()) + (K[0] * xt[0].real)   # sample an action
-# action2 = (action_space.sample()) + (K[0] * xt[1].real) # sample another action
-# action3 = (action_space.sample()) + (K[0] * xt[2].real)  # sample another action
-# print(f'Action 1: {action1}, Action 2: {action2}, Action 3: {action3}')
-# state_evol = AR_model(state, A, B, action1)  # evolve the state for 1 step
-# state2 = AR_model(state_evol, A, B, action2)
-# state3 = AR_model(state2, A, B, action3)  # evolve the state for 2 steps
-# print(state_evol)
-# print(state_evol.shape)
-# print(state2)
-# print(state3)
-# #output in frequency domain (resampled to match the data time vector)
-#xf_in = np.fft.fft(X_f)  # input signal (zt)
-#xf_out = np.fft.fft(x6_interp)
-
-#force = F(tt_data, M[0], At)  # external force applied over time
-
+xf_in = np.fft.fft(zt)
+xf_out = np.fft.fft(x6_interp)
 #only keep positive frequencies
 #the frequencies array is symmetric, so we only need the first half
-xf_in = np.fft.fft(zt)
-
-xf_out = np.fft.fft(x6_interp)
 xf_out = xf_out[:half]
 
 xf_out_windowed = np.fft.fft(x6_interp*window)
@@ -266,55 +218,20 @@ vf_out = np.fft.fft(v6_interp) # output signal (v6)
 
 vf_in_windowed = np.fft.fft(seism*window) # apply the window to the input signal
 vf_out_windowed = np.fft.fft(v6_interp*window)  # apply the window to the output signal
-#trfn = vf_out[:half] / vf_in[:half]
-# # Compute transfer function and its magnitude
-trfn = (xf_out / xf[:half])*dt # experimental transfer function
+
+#Compute transfer function and its magnitude from data
+trfn = (xf_out / xf[:half])*dt #experimental transfer function
 trfn_windowed = (xf_out_windowed[:half] / xf_in_windowed[:half])*dt  # experimental transfer function with windowing
 
 trfn_vel = (vf_out[:half] / vf_in[:half])*dt  # experimental transfer function for velocity
 trfn_vel_windowed = (vf_out_windowed[:half] / vf_in_windowed[:half])*dt  # experimental transfer function for velocity with windowing
-# trfn = (vf_out)/vf_in
 
-freq = frequencies[1:half]
-Pxx = psdVel[1:half]
-omega = 2 * np.pi * freq # angular frequencies
-Pxx = Pxx/omega**2
-ASDvelocity = np.sqrt(Pxx)  # Amplitude Spectral Density of the velocity (from data)
-OUT = (H[2][1:] * ASDvelocity ) # output without control for velocity (ASD)
-#OUT = (H[2] * np.fft.fft(x6_interp[:half]))  # output without control for velocity (ASD)
-df = np.diff(frequencies[1:half])  # frequency resolution
-varxx = np.cumsum(np.flip(df * OUT[:-1]) ** 2) # cumulative variance
-rms_nc = np.flip(np.sqrt(varxx))  # RMS value of the output
-#-----------queste cose qua sotto non sono plottate-----------#
-Hfn = (np.real(trfn) ** 2 + np.imag(trfn) ** 2) ** (1 / 2)
-Hfn_mag = np.abs(Hfn)
 
-# _, psdZ = signal.welch(zt.real, fs = 62.5, window='hann', nperseg=nperseg)  # PSD of the displacement 
-# psdZ = interp1d(fZ, psdZ, kind='linear', bounds_error=False, fill_value=0.0)(frequencies[:half])  # PSD of the displacement
-# w = 2 * np.pi * frequencies[:half]  # angular frequencies
-# psdVel = interp1d(fVel, psdVel, kind='linear', bounds_error=False, fill_value=0.0)(frequencies[:half])  # PSD of the velocity
-#psd_disp = psdVel / omega**2 #convert to displacement
-
-#ASDdisplacement = np.sqrt(psd_disp)  # Amplitude Spectral Density of the displacement (from data)
-# ASDvelocity = np.sqrt(psdVel)  # Amplitude Spectral Density of the velocity (from data)
-
-# out_asd_velocity = H[2] * ASDvelocity  # output without control for velocity (ASD)
-# out_asd_displacement = H[2] * ASDdisplacement  # output without control for displacement (ASD)
-# fA_interp, psdAinterp = signal.welch(At_interp.real, fs = 1e3, window='hann', nperseg=nperseg)  # PSD of the acceleration
-# out_nocontrol = (abs(trfn)* (abs(xf[:half]))) # output without control
-# out_nocontrol_velocity =(abs(trfn_vel) * (abs(vf_in[:half])))  # output without control for velocity
-
-# df = np.diff(frequencies[:half]) # frequency resolution
-# var_nocontrol = np.cumsum(np.flip(df * (out_nocontrol[:-1])** 2))  # cumulative variance
-# rms_nocontrol = np.flip(np.sqrt(var_nocontrol))  # RMS value of the output without control
-#print(f'mean:{np.mean(rms_nocontrol)}, max:{np.max(rms_nocontrol)}, min:{np.min(rms_nocontrol)}')
-
-#print(f'Mean displacement: {np.mean(out_nocontrol):.3e} m, min: {np.min(out_nocontrol):.3e} m, max: {np.max(out_nocontrol):.3e} m')
 
 if __name__ == '__main__':
     #print the structure of the dataset
     #print_hdf5_structure(f)
-    #print_items(dset)
+    print_items(dset)
     plt.figure(figsize=(14, 4))
 
     plt.suptitle('Amplitude spectra', fontsize=16)
@@ -351,12 +268,14 @@ if __name__ == '__main__':
     plt.subplot(2, 1, 1)
     plt.plot(tt_data, seism, label='Velocity')
     plt.ylabel('Amplitude [m/s]')
+    plt.xlim(0, 1000)
     plt.legend()
     plt.grid()
     
     plt.subplot(2, 1, 2)
     plt.plot(tt_data, zt.real, label='Displacement', color='darkorange')
     plt.ylabel('Amplitude [m]')
+    plt.xlim(0, 1000)
     plt.legend()
     plt.grid()
     plt.xlabel('Time [s]')
@@ -380,11 +299,8 @@ if __name__ == '__main__':
     plt.figure(figsize=(12, 5))
     plt.subplot(1, 2, 1)
     plt.loglog(abs(frequencies)[:half], H[2][:half], label="Theoretical TF (from model)", color="blue")
-    plt.loglog(abs(frequencies)[:half], abs(trfn), label=r"Experimental TF ($\tilde{x}_{6}/\tilde{x}_{in}$)", color="red", alpha=0.9)
+    plt.loglog(abs(frequencies)[:half], abs(trfn), label=r"Experimental TF ($\tilde{x}_{6}/\tilde{x}_{in}$)", color="red", alpha=0.2)
     plt.loglog(abs(frequencies[:half]), abs(trfn_windowed), label=r"Experimental TF ($\tilde{x}_{6}/\tilde{x}_{in}$, windowed)", color="darkred", alpha=0.7)
-    #plt.loglog(abs(frequencies[:half]), abs(trfn_vel), label=r"Experimental TF ($\tilde{v}_{6}/\tilde{v}_{in}$)", color="lightgreen", alpha=0.7)
-    #plt.loglog(abs(frequencies[:half]), abs(trfn_vel_windowed), label=r"Experimental TF ($\tilde{v}_{6}/\tilde{v}_{in}$, windowed)", color="darkgreen", alpha=0.7)
-    #plt.loglog(abs(frequencies[1:]), abs(np.fft.fft(xout_interp[1:])/xf)*dt, label="Test", color="orange")
     plt.xlabel("Frequency [Hz]")
     #plt.ylabel("Magnitude")
     plt.grid(True, which='both')
@@ -407,32 +323,29 @@ if __name__ == '__main__':
     #plt.loglog(frequencies[:half], out_nocontrol_velocity, linestyle='-', linewidth=1, marker='', color='red', label=r'Output (H*$\tilde{v}_{in}$)')
     plt.loglog(frequencies[:half], abs(trfn * xf[:half]), linestyle='--', linewidth=1, marker='', color='gold')
     plt.loglog(frequencies[:half], abs(vf_out[:half]*dt), linestyle='-', linewidth=1, marker='', color='steelblue', label=r'Output ($\tilde{v}_{6}$)', alpha=0.3)
-    plt.loglog(frequencies[:half], abs(xf_out[:half]*dt), linestyle='-', linewidth=1, marker='', color='lightcoral', label=r'Output ($\tilde{x}_{6}$)', alpha=0.3)
-    plt.loglog(frequencies[1:half], abs(OUT), linestyle='--', linewidth=1, marker='', color='darkorange', label=r'H*ASD ($\tilde{x}_{in}$)')
+    plt.loglog(frequencies[:half], abs(xf_out[:half]*dt), linestyle='-', linewidth=1, marker='', color='lightcoral', label=r'Output ($\tilde{x}_{6}$)', alpha=0.7)
+    #plt.loglog(frequencies[1:half], abs(OUT), linestyle='--', linewidth=1, marker='', color='darkorange', label=r'H*ASD ($\tilde{x}_{in}$)')
     #plt.loglog(frequencies[:half], out_asd_displacement, linestyle='--', linewidth=1, marker='', color='darkblue', label=r'H*ASD ($\tilde{x}_{6}$)')
     plt.xlabel('Frequency [Hz]', size=12)
     #plt.ylabel('ASD [m/$\sqrt{Hz}$]', size =12)
     plt.grid(True, which='both', ls='-', alpha=0.3, lw=0.5)
 
-    #plt.plot(freq[0:-1], rms_FSF, linestyle='--', linewidth=1, marker='', color='Lime', label='rms control')
-
     plt.legend()
     
-  
-       #---------------------------RMS plot----------------------------#
-    fig = plt.figure(figsize=(5, 5))
-    plt.title('Mirror RMS displacement', size=13)
-    plt.xlabel('Frequency [Hz]', size=12)
-    plt.ylabel('RMS [m]', size =12)
-    plt.yscale('log')
-    plt.xscale('log')
-    #plt.xlim(1e-2, 2)
-    #plt.ylim(1e-15, 1e-4)
-    plt.grid(True, which='both', ls='-', alpha=0.3, lw=0.5)
+    plt.figure(figsize=(8, 5))
+    plt.plot(tt,x6, label = '$x_3, M_3$ (output)')
+    plt.plot(tt, x1, color='red', alpha=0.8, label = '$x_1, M_1$')
+    plt.plot(tt, x2, linestyle='--',color='black', label = '$x_2, M_2$')
+    # plt.plot(np.mean(x6)*np.ones_like(x6), linestyle='--', color='red', label='Mean value')
+    # plt.scatter(x6[np.argmax(np.abs(x6))], np.max(x6), color='green', label='Max value = {:.2e} m'.format(np.max(x6)))
+    # plt.scatter(x6[np.argmin(np.abs(x6))], np.min(x6), color='orange', label='Min value = {:.2e} m'.format(np.min(x6)))
+    plt.title('Time evolution of the output displacement (first 180 s)', size=13)
+    plt.xlabel('Time [s]', size=12)
+    plt.xlim(1600, 1800)
+    plt.ylabel('Displacement [$\mu$m]', size=12)
+    plt.grid(True, ls='-', alpha=0.3, lw=0.5)
     plt.minorticks_on()
-    plt.plot(frequencies[1:half-1], rms_nc, linestyle='-', linewidth=1, marker='', color='orange', label='No control')
-    plt.xlim(1e-2, 2)
-    plt.ylim(1e-15, 1)   
     plt.legend()
+
     plt.show()
 
