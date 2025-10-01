@@ -43,7 +43,7 @@ class LoggingCallback(BaseCallback):
 #callback during training
 callback = LoggingCallback()
 
-def evaluate_control_performance(model, env, max_steps=100_000):  
+def evaluate_control_performance(model, env, max_steps=50_000):  
     """
     Evaluates the performance of a control model in a given environment over a single episode.
     This function runs the provided model in the environment for up to `max_steps` steps or until the first episode ends.
@@ -71,19 +71,20 @@ def evaluate_control_performance(model, env, max_steps=100_000):
     if hasattr(env, 'norm_reward'):
         env.norm_reward = False
     
+    #initialise empty lists to collect data
     all_displacements = []
     all_inputs = []
     all_forces = []
     all_rewards = []
 
+    #reset environment
     obs = env.reset()
     steps = 0
     while steps < max_steps:
         action, _ = model.predict(obs, deterministic=True)
         obs, rewards, dones, info = env.step(action)
         
- 
-         # Collect from all environments
+        #collect data from all environments
         displacements_step = [info_i['displacement'] for info_i in info]
         inputs_step = [info_i['seismic_input'] for info_i in info]
         forces_step = [info_i['force'] for info_i in info]
@@ -94,11 +95,12 @@ def evaluate_control_performance(model, env, max_steps=100_000):
         all_forces.append(forces_step)
         all_rewards.append(rewards_step)
         
+        #check progress
         if steps % 1000 == 0:
             print(f'Step {steps}')
 
         steps += 1
-        if bool(np.asarray(dones)[0]):     # stop at the end of the FIRST episode
+        if bool(np.asarray(dones)[0]):     # stop at the end of the first episode
             break
     print(f"Collected {len(all_displacements)} steps from envs (one episode).")
 
@@ -234,7 +236,7 @@ def create_sac_model(env, log_path="./sac_control"):
         learning_starts=learning_starts,   #changed from 10000
         batch_size=batch_size,  # changedfrom 256
         tau=tau,  # changed from 0.005
-        ent_coef='auto',  
+        ent_coef='auto_0.1',  
         target_update_interval=1,
         gradient_steps=1,
         policy_kwargs=dict(
@@ -330,10 +332,10 @@ if __name__ == '__main__':
         callback=callback,
         progress_bar=True)
     
-    model.save("2909_model")
-    #model.load("2509_model")
+    model.save("110_model2_newreward")
+    #model.load("3009_model")
     print('Starting evaluation...')
-    filename = "2909_file.txt"
+    filename = "110_file_newreward.txt"
     outputs, inputs, forces, rewards = evaluate_control_performance(model, env)
     mean_outputs = outputs.mean(axis=1)
     mean_inputs = inputs.mean(axis=1)
@@ -354,8 +356,8 @@ if __name__ == '__main__':
     
     #(controlled) input and output displacements
     ax = axes[0, 0]
-    ax.plot(t, mean_outputs, 'b-', alpha=0.7, label='Mean Output')
-    ax.plot(t, mean_inputs, 'r-', alpha=0.7, label='Mean Input')
+    ax.plot(t, mean_outputs*1e-6, 'b-', alpha=0.7, label='Mean Output')
+    ax.plot(t, mean_inputs*1e-6, 'r-', alpha=0.7, label='Mean Input')
     ax.set_xlabel('Time [s]')
     ax.set_ylabel('Displacement [m]')
     ax.set_title('Time Domain')

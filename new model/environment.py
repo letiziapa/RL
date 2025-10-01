@@ -84,7 +84,7 @@ class PendulumVerticalEnv(gym.Env):
         self.state = self.AR_model(self.state, self.A, self.B, force)
 
         self.input_disp = self.state[0]  # vertical displacement at the top mass
-        self.output_disp = self.state[5]  # vertical displacement at the bottom mass
+        self.output_disp = self.state[5] # vertical displacement at the bottom mass
         
         self.displacement_history.append(self.output_disp)
         self.input_history.append(self.input_disp)
@@ -128,7 +128,7 @@ class PendulumVerticalEnv(gym.Env):
         rms = np.flip(np.sqrt(var))
         mean_rms = np.mean(rms)  
         if options == 'log':
-            center_reward = -np.log1p(abs(self.output_disp))
+            center_reward = -np.log1p(abs(self.output_disp)+1e-12)
             rms_reward = -np.log1p(mean_rms.real + 1e-12)
             #ratio_reward = np.abs(input_sig) / (np.abs(self.output_disp) +1e-12)
 
@@ -144,7 +144,7 @@ class PendulumVerticalEnv(gym.Env):
         #     bonus = 50.0
         #bonus = 10 * (np.abs(self.interp_displacement[self.current_step]) - np.abs(self.output_disp))
 
-        alpha, beta, gamma = 0.5, 0.5, 0.1
+        alpha, beta = 0.8, 0.5
         # rms_reward /= (np.abs(rms_reward).max() + 1e-10) 
         # center_reward /= (np.abs(center_reward).max() + 1e-10)
         reward = alpha * rms_reward + beta * center_reward #+ gamma * ratio_reward
